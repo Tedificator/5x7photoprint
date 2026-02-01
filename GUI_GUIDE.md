@@ -94,7 +94,11 @@ When you launch the application, you'll see a window with several sections:
 - **Location**: Can be saved anywhere on your computer
 
 ### Progress Tracking
-- **Progress bar**: Animated while processing (indeterminate mode)
+- **Progress bar**: Shows actual completion percentage (0-100%)
+  - 0-80%: Processing individual photos
+  - 80-95%: Creating PDF pages
+  - 95-100%: Saving PDF to disk
+- **Progress percentage**: Displays exact percentage (e.g., "45%")
 - **Status label**: Shows current state:
   - "Ready to process" - waiting to start
   - "Processing photos..." - actively working
@@ -153,6 +157,11 @@ Processing 2/25: IMG_002.jpg
 ...
 Successfully processed 25 images
 Creating PDF: /home/user/output.pdf
+  Added page 1/13 to PDF
+  Added page 2/13 to PDF
+  ...
+  Added page 13/13 to PDF
+Saving PDF file...
 ✓ Processing complete!
 ```
 

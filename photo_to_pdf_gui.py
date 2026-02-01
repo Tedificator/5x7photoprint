@@ -33,10 +33,14 @@ import os
 from pathlib import Path
 from typing import Optional
 import sys
+import io
 
 # Import the photo processor (assumes photo_to_pdf.py is in the same directory)
 try:
     from photo_to_pdf import PhotoProcessor
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.utils import ImageReader
 except ImportError:
     # If we can't import, we'll show an error in the GUI
     PhotoProcessor = None
@@ -179,13 +183,22 @@ class PhotoProcessorGUI:
         )
         self.process_btn.grid(row=0, column=0, pady=(0, 10))
         
-        # Progress bar
+        # Progress bar (determinate mode for actual progress tracking)
         self.progress_bar = ttk.Progressbar(
             progress_frame,
-            mode='indeterminate',
-            length=400
+            mode='determinate',
+            length=400,
+            maximum=100
         )
         self.progress_bar.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=5)
+        
+        # Progress percentage label
+        self.progress_percent_label = ttk.Label(
+            progress_frame,
+            text="0%",
+            font=('Helvetica', 9, 'bold')
+        )
+        self.progress_percent_label.grid(row=2, column=0, sticky=tk.W, pady=(0, 5))
         
         # Status label
         self.status_label = ttk.Label(
@@ -193,7 +206,7 @@ class PhotoProcessorGUI:
             text="Ready to process",
             foreground='gray'
         )
-        self.status_label.grid(row=2, column=0, sticky=tk.W, pady=(5, 0))
+        self.status_label.grid(row=3, column=0, sticky=tk.W, pady=(0, 0))
         
         # ===== LOG/OUTPUT SECTION =====
         log_frame = ttk.LabelFrame(self.root, text="Processing Log", padding="10")
@@ -362,7 +375,8 @@ class PhotoProcessorGUI:
         # Update UI state
         self.processing = True
         self.process_btn.config(state='disabled', text="Processing...")
-        self.progress_bar.start()
+        self.progress_bar['value'] = 0
+        self.progress_percent_label.config(text="0%")
         self.status_label.config(text="Processing photos...", foreground='blue')
         
         # Start processing in a separate thread
@@ -426,11 +440,18 @@ class PhotoProcessorGUI:
                 if msg_type == "log":
                     # Add to log
                     self.log_message(msg_data)
+                
+                elif msg_type == "progress":
+                    # Update progress bar
+                    percent = msg_data
+                    self.progress_bar['value'] = percent
+                    self.progress_percent_label.config(text=f"{percent:.0f}%")
                     
                 elif msg_type == "complete":
                     # Processing completed successfully
                     self.processing = False
-                    self.progress_bar.stop()
+                    self.progress_bar['value'] = 100
+                    self.progress_percent_label.config(text="100%")
                     self.process_btn.config(state='normal', text="Start Processing")
                     self.status_label.config(text="✓ Complete!", foreground='green')
                     
@@ -447,7 +468,8 @@ class PhotoProcessorGUI:
                 elif msg_type == "error":
                     # Processing failed
                     self.processing = False
-                    self.progress_bar.stop()
+                    self.progress_bar['value'] = 0
+                    self.progress_percent_label.config(text="0%")
                     self.process_btn.config(state='normal', text="Start Processing")
                     self.status_label.config(text="✗ Error occurred", foreground='red')
                     
@@ -583,13 +605,18 @@ class PhotoProcessorWithLogging(PhotoProcessor):
     
     def process_folder(self, input_folder, output_pdf):
         """
-        Override process_folder to use custom logging.
+        Override process_folder to use custom logging and progress tracking.
+        
+        Progress calculation:
+        - 80% for processing images (divided equally per image)
+        - 15% for creating PDF pages
+        - 5% for saving PDF file
         
         Args:
             input_folder: Path to folder containing input images
             output_pdf: Path where the output PDF should be saved
         """
-        # Same logic as parent class but with custom logging
+        # Same logic as parent class but with custom logging and progress
         image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'}
         
         input_path = Path(input_folder)
@@ -606,14 +633,19 @@ class PhotoProcessorWithLogging(PhotoProcessor):
         
         image_files.sort()
         
-        self.log(f"Found {len(image_files)} images to process")
+        total_images = len(image_files)
+        self.log(f"Found {total_images} images to process")
         self.log("-" * 50)
+        
+        # Progress tracking: 80% for image processing
+        progress_per_image = 80.0 / total_images if total_images > 0 else 0
+        current_progress = 0.0
         
         processed_images = []
         filenames = []
         
         for idx, img_file in enumerate(image_files, 1):
-            self.log(f"Processing {idx}/{len(image_files)}: {img_file.name}")
+            self.log(f"Processing {idx}/{total_images}: {img_file.name}")
             
             face_center = self.detect_face_center(str(img_file))
             
@@ -633,17 +665,133 @@ class PhotoProcessorWithLogging(PhotoProcessor):
                 processed_images.append(cropped_landscape)
                 filenames.append(img_file.name)
                 
+                # Update progress
+                current_progress += progress_per_image
+                self.message_queue.put(("progress", current_progress))
+                
             except Exception as e:
                 self.log(f"  Error processing {img_file.name}: {e}")
                 continue
         
         self.log("-" * 50)
         self.log(f"Successfully processed {len(processed_images)} images")
+        
+        # 80% complete - now creating PDF
+        self.message_queue.put(("progress", 80.0))
         self.log(f"Creating PDF: {output_pdf}")
         
-        self.create_pdf_with_filenames(processed_images, filenames, output_pdf)
+        # Create PDF with progress tracking
+        self.create_pdf_with_filenames_and_progress(processed_images, filenames, output_pdf)
         
+        # 100% complete
+        self.message_queue.put(("progress", 100.0))
         self.log(f"PDF created successfully!")
+    
+    def create_pdf_with_filenames_and_progress(self, images, filenames, output_path):
+        """
+        Create PDF with progress updates.
+        
+        Args:
+            images: List of PIL Image objects
+            filenames: List of original filenames
+            output_path: Path where PDF should be saved
+        """
+        # Store filenames for use in get_original_filename
+        self._current_filenames = filenames
+        
+        # Calculate progress per page (15% total for PDF creation)
+        total_pages = (len(images) + 1) // 2  # 2 images per page
+        progress_per_page = 15.0 / total_pages if total_pages > 0 else 0
+        
+        # Create PDF canvas
+        c = canvas.Canvas(output_path, pagesize=letter)
+        
+        # Calculate photo dimensions in points (1 inch = 72 points)
+        photo_width_pts = self.PHOTO_WIDTH_INCHES * 72    # 7" = 504 points
+        photo_height_pts = self.PHOTO_HEIGHT_INCHES * 72  # 5" = 360 points
+        
+        # Calculate positions
+        x_position = (self.PAGE_WIDTH - photo_width_pts) / 2
+        top_margin = 36
+        spacing_between = 18
+        y_position_top = self.PAGE_HEIGHT - top_margin - photo_height_pts
+        y_position_bottom = y_position_top - spacing_between - photo_height_pts
+        
+        page_number = 0
+        
+        # Process images in pairs (2 per page)
+        for i in range(0, len(images), 2):
+            page_number += 1
+            
+            # Draw first photo
+            img1_buffer = io.BytesIO()
+            img1 = images[i]
+            if img1.height > img1.width:
+                img1 = img1.rotate(90, expand=True)
+            
+            img1.save(img1_buffer, format='PNG', compress_level=9)
+            img1_buffer.seek(0)
+            
+            c.drawImage(
+                ImageReader(img1_buffer),
+                x_position,
+                y_position_top,
+                width=photo_width_pts,
+                height=photo_height_pts,
+                preserveAspectRatio=True
+            )
+            
+            # Draw filename text for first photo
+            text_y = y_position_top - 8
+            c.setFont("Helvetica", self.TEXT_FONT_SIZE)
+            c.setFillColorRGB(0, 0, 0)
+            filename1 = self.get_original_filename(i, len(images))
+            text_width = c.stringWidth(filename1, "Helvetica", self.TEXT_FONT_SIZE)
+            text_x = x_position + (photo_width_pts - text_width) / 2
+            c.drawString(text_x, text_y, filename1)
+            
+            # Draw second photo if it exists
+            if i + 1 < len(images):
+                img2 = images[i + 1]
+                if img2.height > img2.width:
+                    img2 = img2.rotate(90, expand=True)
+                
+                img2_buffer = io.BytesIO()
+                img2.save(img2_buffer, format='PNG', compress_level=9)
+                img2_buffer.seek(0)
+                
+                c.drawImage(
+                    ImageReader(img2_buffer),
+                    x_position,
+                    y_position_bottom,
+                    width=photo_width_pts,
+                    height=photo_height_pts,
+                    preserveAspectRatio=True
+                )
+                
+                # Draw filename text for second photo
+                text_y2 = y_position_bottom - 8
+                filename2 = self.get_original_filename(i + 1, len(images))
+                text_width2 = c.stringWidth(filename2, "Helvetica", self.TEXT_FONT_SIZE)
+                text_x2 = x_position + (photo_width_pts - text_width2) / 2
+                c.drawString(text_x2, text_y2, filename2)
+            
+            # Update progress after each page
+            current_pdf_progress = 80.0 + (page_number * progress_per_page)
+            self.message_queue.put(("progress", current_pdf_progress))
+            self.log(f"  Added page {page_number}/{total_pages} to PDF")
+            
+            # Move to next page (unless this is the last page)
+            if i + 2 < len(images):
+                c.showPage()
+        
+        # Saving PDF - final 5%
+        self.log("Saving PDF file...")
+        self.message_queue.put(("progress", 95.0))
+        c.save()
+        
+        # Clean up
+        self._current_filenames = None
     
     def detect_face_center(self, image_path):
         """Override to add logging for face detection."""
