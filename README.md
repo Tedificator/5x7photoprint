@@ -4,6 +4,8 @@ A Python script that automatically processes photos for printing by detecting fa
 
 ## Features
 
+- **Graphical User Interface**: Easy-to-use GUI for non-technical users
+- **Command-Line Interface**: Full-featured CLI for automation and scripts
 - **Face Detection**: Automatically detects faces in photos using OpenCV's Haar Cascade classifier
 - **Smart Cropping**: Crops images to 5x7 aspect ratio, centered on detected faces
 - **Face-Centered**: When multiple faces are detected, crops around the average center point
@@ -49,7 +51,26 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Basic Usage
+### GUI Application (Recommended for Beginners)
+
+The easiest way to use this tool is with the graphical interface:
+
+```bash
+python photo_to_pdf_gui.py
+```
+
+This opens a window where you can:
+- Browse and select your photo folder
+- Choose where to save the PDF
+- See real-time progress
+- View processing logs
+- Get notifications when complete
+
+**No command-line experience needed!**
+
+### Command-Line Usage
+
+For advanced users or automation:
 
 ```bash
 python photo_to_pdf.py <input_folder> <output_pdf>
@@ -99,11 +120,14 @@ THEN center crop box on:
 ```
 
 ### 3. PDF Layout
-- Page size: 8.5 x 11 inches (US Letter)
+- Page size: 8.5 x 11 inches (US Letter, Portrait orientation)
 - Photos per page: 2 (arranged vertically)
-- Photo size: 5 x 7 inches each
-- Margins: 0.5 inches
-- Spacing between photos: 20 points (~0.28 inches)
+- Photo size: 7 x 5 inches each (Landscape orientation)
+- Photo dimensions fit perfectly:
+  - 7" width fits within 8.5" page width (with 0.75" side margins)
+  - Two 5" heights fit within 11" page height (with 0.5" top margin, 0.25" spacing, 0.25" bottom margin)
+- Margins: Minimum 0.5" on all edges
+- Filename labels: 5pt font below each photo
 - Resolution: 300 DPI for high-quality printing
 
 ### 4. Output Quality
@@ -125,18 +149,21 @@ THEN center crop box on:
 You can modify these constants in the `PhotoProcessor` class:
 
 ```python
-# Change photo dimensions (currently 5x7)
-PHOTO_WIDTH_INCHES = 5.0
-PHOTO_HEIGHT_INCHES = 7.0
+# Change photo dimensions (currently 7x5 landscape)
+PHOTO_WIDTH_INCHES = 7.0   # Width when landscape
+PHOTO_HEIGHT_INCHES = 5.0  # Height when landscape
 
 # Change output quality (currently 300 DPI)
 DPI = 300
 
-# Change page margins (currently 0.5 inches)
+# Change page margins (currently 0.5 inches minimum)
 MARGIN = 36  # in points (72 points = 1 inch)
 
-# Change spacing between photos
-SPACING = 20  # in points
+# Change spacing between photos (currently 0.25 inches)
+SPACING = 18  # in points
+
+# Change filename text size (currently 5pt)
+TEXT_FONT_SIZE = 5  # in points
 ```
 
 ### Using as a Library
@@ -258,11 +285,12 @@ ReportLab uses bottom-left origin:
 Page layout calculation:
 ```
 Letter size: 612 × 792 points (8.5 × 11 inches)
-Photo size: 360 × 504 points (5 × 7 inches)
-Margin: 36 points (0.5 inches)
+Photo size: 504 × 360 points (7 × 5 inches, landscape)
+Margins: 0.5" minimum (0.75" actual on sides for centering)
 
-First photo Y: 792 - 36 - 504 = 252 points from bottom
-Second photo Y: First_Y - 504 - 20 = below first photo
+Horizontal centering: x = (612 - 504) / 2 = 54 points from left
+First photo Y: 792 - 36 (top margin) - 360 (photo height) = 396 points from bottom
+Second photo Y: First_Y - 18 (spacing) - 360 (photo height) = 18 points from bottom
 ```
 
 ## Performance

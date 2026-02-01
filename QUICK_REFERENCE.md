@@ -10,7 +10,21 @@ pip install -r requirements.txt
 python test_processor.py
 ```
 
-## Basic Usage
+## Starting the Application
+
+### GUI Mode (Easiest)
+```bash
+# Launch the graphical interface
+python photo_to_pdf_gui.py
+```
+
+Then:
+1. Click "Browse..." to select your photo folder
+2. Click "Browse..." to choose where to save the PDF
+3. Click "Start Processing"
+4. Wait for completion dialog
+
+### Command-Line Mode (For Automation)
 
 ```bash
 # Process a folder of photos
@@ -55,10 +69,12 @@ python test_processor.py
 
 ```
 your-project/
-├── photo_to_pdf.py      # Main script
+├── photo_to_pdf.py      # Main processing script
+├── photo_to_pdf_gui.py  # GUI application
 ├── requirements.txt     # Dependencies
 ├── test_processor.py    # Test script
 ├── README.md           # Full documentation
+├── GUI_GUIDE.md        # GUI user guide
 └── QUICK_REFERENCE.md  # This file
 ```
 

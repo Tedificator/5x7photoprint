@@ -44,15 +44,16 @@ class PhotoProcessor:
     """
     
     # Constants for photo dimensions and quality
-    ASPECT_RATIO = 5.0 / 7.0  # 5x7 photo ratio
+    ASPECT_RATIO = 5.0 / 7.0  # 5x7 photo ratio (before rotation)
     DPI = 300  # High quality for printing
-    PHOTO_WIDTH_INCHES = 5.0
-    PHOTO_HEIGHT_INCHES = 7.0
+    PHOTO_WIDTH_INCHES = 7.0   # Width when landscape (was 5.0)
+    PHOTO_HEIGHT_INCHES = 5.0  # Height when landscape (was 7.0)
     
     # PDF layout constants (in points: 72 points = 1 inch)
     PAGE_WIDTH, PAGE_HEIGHT = letter  # 612 x 792 points (8.5 x 11 inches)
-    MARGIN = 36  # 0.5 inch margin
-    SPACING = 20  # Space between photos and text
+    MARGIN = 36  # 0.5 inch margin (0.5 * 72)
+    SPACING = 10  # Space between photos (reduced for tighter layout)
+    TEXT_FONT_SIZE = 5  # Small font for filename labels
     
     def __init__(self, face_cascade_path: Optional[str] = None):
         """
@@ -180,29 +181,29 @@ class PhotoProcessor:
         
         return cropped
     
-    def add_filename_to_image(self, image: Image.Image, filename: str, font_size: int = 24) -> Image.Image:
+    def add_filename_to_image(self, image: Image.Image, filename: str, font_size: int = 12) -> Image.Image:
         """
-        Add filename text to the bottom of an image.
+        Add filename text to the right side of an image.
         
-        Creates a new image with extra space at the bottom containing the filename.
-        The text is centered and uses a clean sans-serif font.
+        For landscape 7x5 photos, adds the filename vertically on the right edge.
+        The text is small (5pt default in PDF) but readable for identification.
         
         Args:
             image: PIL Image to add text to
             filename: Text to display (typically the original filename)
-            font_size: Size of the font in points
+            font_size: Size of the font in points (default 12 for image, scaled in PDF)
             
         Returns:
-            New PIL Image with filename label at the bottom
+            New PIL Image with filename label on the right side
         """
-        # Calculate dimensions for the new image with text area
-        text_height = font_size + 20  # Extra padding around text
-        new_height = image.height + text_height
+        # We'll add a small strip on the right for the filename
+        text_width = 40  # Small strip on the right side
+        new_width = image.width + text_width
         
         # Create new image with white background
-        new_image = Image.new('RGB', (image.width, new_height), 'white')
+        new_image = Image.new('RGB', (new_width, image.height), 'white')
         
-        # Paste original image at the top
+        # Paste original image on the left
         new_image.paste(image, (0, 0))
         
         # Prepare to draw text
@@ -218,17 +219,25 @@ class PhotoProcessor:
                 # Use default font as last resort
                 font = ImageFont.load_default()
         
-        # Get text bounding box to center it
-        bbox = draw.textbbox((0, 0), filename, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height_actual = bbox[3] - bbox[1]
+        # Rotate text to be vertical
+        # Create a temporary image for the text
+        temp_img = Image.new('RGB', (image.height, text_width), 'white')
+        temp_draw = ImageDraw.Draw(temp_img)
         
-        # Calculate position to center text horizontally
-        x = (image.width - text_width) // 2
-        y = image.height + (text_height - text_height_actual) // 2
+        # Draw text on temp image (will be rotated)
+        # Position text in the middle of the temp image
+        bbox = temp_draw.textbbox((0, 0), filename, font=font)
+        text_height = bbox[3] - bbox[1]
+        text_x = (image.height - text_height) // 2
+        text_y = (text_width - (bbox[2] - bbox[0])) // 2
         
-        # Draw the text in black
-        draw.text((x, y), filename, fill='black', font=font)
+        temp_draw.text((text_x, text_y), filename, fill='black', font=font)
+        
+        # Rotate temp image 90 degrees counter-clockwise
+        rotated_text = temp_img.rotate(90, expand=True)
+        
+        # Paste rotated text onto the right side
+        new_image.paste(rotated_text, (image.width, 0))
         
         return new_image
     
@@ -239,9 +248,9 @@ class PhotoProcessor:
         This orchestrates the entire workflow:
         1. Find all image files in the input folder
         2. Detect faces and crop each image to 5x7
-        3. Add filename labels
+        3. Rotate to landscape orientation (7x5)
         4. Arrange images on 8.5x11 pages (2 per page)
-        5. Generate lossless PDF
+        5. Generate lossless PDF with filenames
         
         Args:
             input_folder: Path to folder containing input images
@@ -271,6 +280,8 @@ class PhotoProcessor:
         
         # Process each image
         processed_images = []
+        filenames = []
+        
         for img_file in image_files:
             print(f"Processing: {img_file.name}")
             
@@ -285,13 +296,16 @@ class PhotoProcessor:
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
                 
-                # Crop to 5x7 ratio
+                # Crop to 5x7 ratio (portrait)
                 cropped = self.crop_to_5x7(img, face_center)
                 
-                # Add filename label
-                labeled = self.add_filename_to_image(cropped, img_file.name)
+                # Rotate to landscape (7x5) for PDF layout
+                # The cropped image is portrait (5 wide x 7 tall)
+                # We need it landscape (7 wide x 5 tall)
+                cropped_landscape = cropped.rotate(90, expand=True)
                 
-                processed_images.append(labeled)
+                processed_images.append(cropped_landscape)
+                filenames.append(img_file.name)
                 
             except Exception as e:
                 print(f"  Error processing {img_file.name}: {e}")
@@ -301,17 +315,44 @@ class PhotoProcessor:
         print(f"Successfully processed {len(processed_images)} images")
         print(f"Creating PDF: {output_pdf}")
         
-        # Create the PDF
-        self.create_pdf(processed_images, output_pdf)
+        # Create the PDF with filenames
+        self.create_pdf_with_filenames(processed_images, filenames, output_pdf)
         
         print(f"PDF created successfully: {output_pdf}")
     
+    def create_pdf_with_filenames(self, images: List[Image.Image], filenames: List[str], output_path: str):
+        """
+        Create a PDF with 2 landscape images per page with filename labels.
+        
+        This is a wrapper around create_pdf that includes filename information.
+        
+        Args:
+            images: List of PIL Image objects (already cropped and rotated to landscape)
+            filenames: List of original filenames corresponding to each image
+            output_path: Path where PDF should be saved
+        """
+        # Store filenames for use in get_original_filename
+        self._current_filenames = filenames
+        
+        # Call the main PDF creation method
+        self.create_pdf(images, output_path)
+        
+        # Clean up
+        self._current_filenames = None
+    
     def create_pdf(self, images: List[Image.Image], output_path: str):
         """
-        Create a PDF with 2 images per page, arranged vertically.
+        Create a PDF with 2 landscape images per page, arranged vertically.
         
-        Images are saved losslessly using PNG compression to maintain quality.
-        Each 8.5x11 page contains two 5x7 photos with their filenames.
+        Images are 7x5 inches (landscape orientation) and are positioned to fit
+        perfectly on an 8.5x11 inch portrait page with 0.5 inch margins.
+        
+        Layout:
+        - Page: 8.5" wide x 11" tall (portrait)
+        - Photos: 7" wide x 5" tall (landscape)
+        - Margins: 0.5" on all sides
+        - Available space: 7.5" wide x 10" tall
+        - Two photos vertically with spacing between
         
         Args:
             images: List of PIL Image objects (already cropped and labeled)
@@ -321,27 +362,50 @@ class PhotoProcessor:
         c = canvas.Canvas(output_path, pagesize=letter)
         
         # Calculate photo dimensions in points (1 inch = 72 points)
-        photo_width_pts = self.PHOTO_WIDTH_INCHES * 72
-        photo_height_pts = self.PHOTO_HEIGHT_INCHES * 72
+        photo_width_pts = self.PHOTO_WIDTH_INCHES * 72    # 7" = 504 points
+        photo_height_pts = self.PHOTO_HEIGHT_INCHES * 72  # 5" = 360 points
         
-        # We'll add text height separately since we added it to the image
-        # But we need to account for it in positioning
+        # Calculate positions to center photos horizontally with proper margins
+        # Page width is 8.5" = 612 points
+        # Photo width is 7" = 504 points
+        # Left margin = (612 - 504) / 2 = 54 points = 0.75"
+        # This gives us 0.75" margins on left and right (slightly more than 0.5" minimum)
+        x_position = (self.PAGE_WIDTH - photo_width_pts) / 2
+        
+        # Calculate vertical positions for two photos
+        # Page height is 11" = 792 points
+        # Each photo is 5" = 360 points
+        # Total photo height = 2 * 360 = 720 points
+        # Remaining space = 792 - 720 = 72 points = 1"
+        # We want 0.5" top margin, 0.5" bottom margin, and space between photos
+        # Top margin = 36 points (0.5")
+        # Bottom margin = 36 points (0.5")
+        # Space between = 72 - 36 - 36 = 0 points
+        # Actually let's distribute: top=0.5", spacing=0.25", bottom=0.25" (total 1")
+        
+        top_margin = 36  # 0.5 inch
+        spacing_between = 18  # 0.25 inch between photos
+        
+        # First photo: positioned from top
+        y_position_top = self.PAGE_HEIGHT - top_margin - photo_height_pts
+        
+        # Second photo: positioned below first with spacing
+        y_position_bottom = y_position_top - spacing_between - photo_height_pts
         
         # Process images in pairs (2 per page)
         for i in range(0, len(images), 2):
-            # Center photos horizontally on the page
-            x_position = (self.PAGE_WIDTH - photo_width_pts) / 2
-            
-            # First photo: positioned from top with margin
-            y_position_top = self.PAGE_HEIGHT - self.MARGIN - photo_height_pts
-            
             # Draw first photo
             img1_buffer = io.BytesIO()
+            # Rotate image to landscape if it's not already
+            img1 = images[i]
+            if img1.height > img1.width:
+                img1 = img1.rotate(90, expand=True)
+            
             # Save as PNG for lossless compression
-            images[i].save(img1_buffer, format='PNG', compress_level=9)
+            img1.save(img1_buffer, format='PNG', compress_level=9)
             img1_buffer.seek(0)
             
-            # Scale image to fit exact dimensions
+            # Draw first image
             c.drawImage(
                 ImageReader(img1_buffer),
                 x_position,
@@ -351,13 +415,27 @@ class PhotoProcessor:
                 preserveAspectRatio=True
             )
             
+            # Draw filename text for first photo (small, 5pt)
+            # Position text just below the photo
+            text_y = y_position_top - 8  # 8 points below photo
+            c.setFont("Helvetica", self.TEXT_FONT_SIZE)
+            c.setFillColorRGB(0, 0, 0)  # Black text
+            
+            # Get original filename (strip the added text area info)
+            # Text is centered below the photo
+            filename1 = self.get_original_filename(i, len(images))
+            text_width = c.stringWidth(filename1, "Helvetica", self.TEXT_FONT_SIZE)
+            text_x = x_position + (photo_width_pts - text_width) / 2
+            c.drawString(text_x, text_y, filename1)
+            
             # Draw second photo if it exists
             if i + 1 < len(images):
-                # Position second photo below first with spacing
-                y_position_bottom = y_position_top - photo_height_pts - self.SPACING
+                img2 = images[i + 1]
+                if img2.height > img2.width:
+                    img2 = img2.rotate(90, expand=True)
                 
                 img2_buffer = io.BytesIO()
-                images[i + 1].save(img2_buffer, format='PNG', compress_level=9)
+                img2.save(img2_buffer, format='PNG', compress_level=9)
                 img2_buffer.seek(0)
                 
                 c.drawImage(
@@ -368,6 +446,13 @@ class PhotoProcessor:
                     height=photo_height_pts,
                     preserveAspectRatio=True
                 )
+                
+                # Draw filename text for second photo
+                text_y2 = y_position_bottom - 8
+                filename2 = self.get_original_filename(i + 1, len(images))
+                text_width2 = c.stringWidth(filename2, "Helvetica", self.TEXT_FONT_SIZE)
+                text_x2 = x_position + (photo_width_pts - text_width2) / 2
+                c.drawString(text_x2, text_y2, filename2)
             
             # Move to next page (unless this is the last page)
             if i + 2 < len(images):
@@ -375,6 +460,21 @@ class PhotoProcessor:
         
         # Save the PDF
         c.save()
+    
+    def get_original_filename(self, index: int, total: int) -> str:
+        """
+        Helper method to get the original filename for display in PDF.
+        
+        Args:
+            index: Index of the current image
+            total: Total number of images
+            
+        Returns:
+            Original filename or placeholder
+        """
+        if hasattr(self, '_current_filenames') and self._current_filenames:
+            return self._current_filenames[index]
+        return f"Photo {index + 1}"
 
 
 def main():
