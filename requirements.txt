@@ -1,0 +1,11 @@
+# Photo to PDF Processor - Requirements
+# Install with: pip install -r requirements.txt
+
+# Image processing library
+Pillow>=10.0.0
+
+# Computer vision library for face detection
+opencv-python>=4.8.0
+
+# PDF generation library
+reportlab>=4.0.0
